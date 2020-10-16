@@ -229,10 +229,10 @@ Scene::Render(const bool do_composite)
       {
         SynchDepths(current_batch);
       }
-      (*renderer)->SetDoComposite(true);
+      (*renderer)->SetDoComposite(do_composite);
       (*renderer)->SetRenders(current_batch);
       (*renderer)->Update();
-
+      
       current_batch  = (*renderer)->GetRenders();
       (*renderer)->ClearRenders();
     }
@@ -253,13 +253,30 @@ Scene::Render(const bool do_composite)
       do_once = false;
     }
 
-    // save images in parallel
+    // render screen annotations last 
+    if (false && do_composite) // TODO: annotations for hybrid rendering
+    {
+      for(int i = 0; i < current_batch.size(); ++i)
+      {
+        current_batch[i].RenderWorldAnnotations();
+        current_batch[i].RenderScreenAnnotations(field_names, ranges, color_tables);
+        current_batch[i].RenderBackground();
+      }
+    }
+
+#ifdef VTKH_USE_OPENMP
+    #pragma omp parallel for
+#endif
     for(int i = 0; i < current_batch.size(); ++i)
     {
-      current_batch[i].RenderWorldAnnotations();
-      current_batch[i].RenderScreenAnnotations(field_names, ranges, color_tables);
-      current_batch[i].RenderBackground();
-      current_batch[i].Save();
+      // current_batch[i].RenderWorldAnnotations();
+      // current_batch[i].RenderScreenAnnotations(field_names, ranges, color_tables);
+      // current_batch[i].RenderBackground();
+
+      if (do_composite)
+      {
+        current_batch[i].Save(true);
+      }
     }
 
     batch_start = batch_end;
@@ -286,7 +303,7 @@ void Scene::SynchDepths(std::vector<vtkh::Render> &renders)
 void
 Scene::Save()
 {
-
+  std::cout << "SCENE SAVE" << std::endl;
 }
 
 } // namespace vtkh

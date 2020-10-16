@@ -80,7 +80,9 @@ bool
 DataSet::OneDomainPerRank() const
 {
   bool at_least_one = GetNumberOfDomains() < 2;
-  return detail::GlobalAgreement(at_least_one);
+  // TODO: avoid global call
+  // return detail::GlobalAgreement(at_least_one);
+  return at_least_one;
 }
 
 void

@@ -314,7 +314,7 @@ Renderer::DoExecute()
       continue;
     }
 
-    // TODO: m_range ->  m_scalar_range ; threshold == 0.01 ?
+    // TODO: m_range ->  m_scalar_range ; threshold == 0.001 ?
     if (!HasContribution(m_range, data_set, vtkm::Float64(0.001)))
     {
       int rank = 0;

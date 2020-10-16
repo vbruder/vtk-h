@@ -506,16 +506,35 @@ VolumeRenderer::RenderOneDomainPerRank()
       continue;
     }
 
+    // TODO: m_range ->  m_scalar_range ; threshold == 0.001 ?
+    if (!HasContribution(m_range, data_set, vtkm::Float64(0.001)))
+    {
+      int rank = 0;
+#ifdef VTKH_PARALLEL
+      rank = vtkh::GetMPIRank();
+#endif
+      m_skipped = true;
+      std::cout << "---Skip block on rank " << rank << std::endl;
+      AddRenderTime(0.0);
+      continue;
+    }
+    else
+    {
+      m_skipped = false;
+    }
+
     const vtkm::cont::DynamicCellSet &cellset = data_set.GetCellSet();
     const vtkm::cont::Field &field = data_set.GetField(m_field_name);
     const vtkm::cont::CoordinateSystem &coords = data_set.GetCoordinateSystem();
 
     if(cellset.GetNumberOfCells() == 0) continue;
 
+    log_global_time("begin rendering", vtkh::GetMPIRank());
     for(int i = 0; i < total_renders; ++i)
     {
       m_mapper->SetActiveColorTable(m_corrected_color_table);
 
+      auto t1 = std::chrono::high_resolution_clock::now();
       Render::vtkmCanvas &canvas = m_renders[i].GetCanvas();
       const vtkmCamera &camera = m_renders[i].GetCamera();
       m_mapper->SetCanvas(&canvas);
@@ -525,15 +544,27 @@ VolumeRenderer::RenderOneDomainPerRank()
                             m_corrected_color_table,
                             camera,
                             m_range);
+      auto t2 = std::chrono::high_resolution_clock::now();
+
+      // TODO: fake higher render load
+      usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+      auto t3 = std::chrono::high_resolution_clock::now();
+
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t1).count();
+      AddRenderTime(duration);
     }
+    log_global_time("end rendering", vtkh::GetMPIRank());
   }
 
-  if(m_do_composite)
-  {
-    this->Composite(total_renders);
-  }
+  // TODO: remove
+  // if(m_do_composite)
+  // {
+  //   this->Composite(total_renders);
+  // }
 }
 
+
+// TODO: port to hybrid in situ
 void
 VolumeRenderer::RenderMultipleDomainsPerRank()
 {
@@ -737,7 +768,6 @@ VolumeRenderer::PostExecute()
         m_color_buffers[i][j] = static_cast<unsigned char>(int(color_buffer[j] * 255.f));
 
       // m_depth_buffers[i] = std::vector<float>(depth_buffer, depth_buffer + size);
-
 
       // TODO: test and fix active pixel encoding
       // ActivePixelEncoding(size, color_buffer, depth_buffer, m_color_buffers[i], m_depth_buffers[i]);
