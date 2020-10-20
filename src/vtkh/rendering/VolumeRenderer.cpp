@@ -599,12 +599,18 @@ VolumeRenderer::RenderMultipleDomainsPerRank()
     wrapper->field(m_field_name);
     wrapper->scalar_range(m_range);
 
+    log_global_time("begin rendering", vtkh::GetMPIRank());
     for(int r = 0; r < total_renders; ++r)
     {
+      auto t1 = std::chrono::high_resolution_clock::now();
       Render::vtkmCanvas &canvas = m_renders[r].GetCanvas();
       const vtkmCamera &camera = m_renders[r].GetCamera();
       wrapper->render(camera, canvas, render_partials[r][i]);
+      auto t2 = std::chrono::high_resolution_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+      AddRenderTime(duration);
     }
+    log_global_time("end rendering", vtkh::GetMPIRank());
   }
 
   PartialCompositor<VolumePartial<float>> compositor;
