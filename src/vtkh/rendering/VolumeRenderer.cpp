@@ -493,7 +493,7 @@ VolumeRenderer::RenderOneDomainPerRank()
   int num_domains = static_cast<int>(m_input->GetNumberOfDomains());
   if(num_domains > 1)
   {
-    throw Error("RenderOneDomainPerRank: this should never happend.");
+    throw Error("RenderOneDomainPerRank: this should never happen.");
   }
   for(int dom = 0; dom < num_domains; ++dom)
   {
@@ -514,7 +514,7 @@ VolumeRenderer::RenderOneDomainPerRank()
       rank = vtkh::GetMPIRank();
 #endif
       m_skipped = true;
-      std::cout << "---Skip block on rank " << rank << std::endl;
+      std::cout << "--- Skip block on rank " << rank << std::endl;
       AddRenderTime(0.0);
       continue;
     }
@@ -529,14 +529,24 @@ VolumeRenderer::RenderOneDomainPerRank()
 
     if(cellset.GetNumberOfCells() == 0) continue;
 
+    m_color_buffers.resize(total_renders);
+    m_depths.resize(m_renders.size(), std::numeric_limits<float>::lowest());
+
     log_global_time("begin rendering", vtkh::GetMPIRank());
     for(int i = 0; i < total_renders; ++i)
     {
+      Render::vtkmCanvas &canvas = m_renders[i].GetCanvas();
+      canvas.Clear(); // TODO: 
+      const vtkmCamera &camera = m_renders[i].GetCamera();
+
+      const int width = canvas.GetWidth();
+      const int height = canvas.GetHeight();
+      const int size = width * height;
+      const int color_size = size * 4;
+
       m_mapper->SetActiveColorTable(m_corrected_color_table);
 
       auto t1 = std::chrono::high_resolution_clock::now();
-      Render::vtkmCanvas &canvas = m_renders[i].GetCanvas();
-      const vtkmCamera &camera = m_renders[i].GetCamera();
       m_mapper->SetCanvas(&canvas);
       m_mapper->RenderCells(cellset,
                             coords,
@@ -544,7 +554,18 @@ VolumeRenderer::RenderOneDomainPerRank()
                             m_corrected_color_table,
                             camera,
                             m_range);
+      // if (vtkh::GetMPIRank() == 0)
+      //   std::cout << i << "   " << (m_mapper->GetCanvas()) << std::endl;
+
       auto t2 = std::chrono::high_resolution_clock::now();
+
+      // if (i < 5 && vtkh::GetMPIRank() == 0)
+      // {
+      //   std::cout << i << " " << color_buffer << std::endl;
+      //   PNGEncoder encoder;
+      //   encoder.Encode(color_buffer, 800, 800);
+      //   encoder.Save(m_renders[i].GetImageName() + std::to_string(vtkh::GetMPIRank()) + "-DEBUG.png");
+      // }
 
       // TODO: fake higher render load
       usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
@@ -552,6 +573,21 @@ VolumeRenderer::RenderOneDomainPerRank()
 
       auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t1).count();
       AddRenderTime(duration);
+
+      // Copy color buffer. we need to do this here because of the buffer override.
+      if (!m_skipped)
+      {
+        float* color_buffer = &GetVTKMPointer(canvas.GetColorBuffer())[0][0];
+        m_color_buffers[i] = std::vector<unsigned char>(color_size, 0u);
+      #ifdef VTKH_USE_OPENMP
+        #pragma omp parallel for
+      #endif
+        for (size_t j = 0; j < m_color_buffers[i].size(); j++)
+          m_color_buffers[i][j] = static_cast<unsigned char>(int(color_buffer[j] * 255.f));
+
+        vtkm::Bounds bounds = this->m_input->GetDomainBounds(0);
+        m_depths[i] = FindMinDepth(camera, bounds);
+      }
     }
     log_global_time("end rendering", vtkh::GetMPIRank());
   }
@@ -568,6 +604,7 @@ VolumeRenderer::RenderOneDomainPerRank()
 void
 VolumeRenderer::RenderMultipleDomainsPerRank()
 {
+  std::cout << "!! Multi domain" << std::endl;
   // We are treating this as the most general case
   // where we could have a mix of structured and
   // unstructured data sets. There are zero
@@ -737,7 +774,7 @@ VolumeRenderer::PostExecute()
     this->Composite(total_renders);
     log_global_time("end compositing", rank);
   }
-  else if (!m_skipped)
+  else if (!m_skipped && false) // we copy the color buffer in RenderOneDomainPerRank now
   {
     // auto start0 = std::chrono::system_clock::now();
 
@@ -745,7 +782,7 @@ VolumeRenderer::PostExecute()
     m_depth_buffers.resize(m_renders.size());
     m_color_buffers.resize(m_renders.size());
 
-    for (size_t i = 0; i < m_renders.size(); i++)
+    for (size_t i = 0; i < 0; ++i)// m_renders.size(); i++)
     {
       int width = m_renders[i].GetCanvas().GetWidth();
       int height = m_renders[i].GetCanvas().GetHeight();
@@ -783,8 +820,12 @@ VolumeRenderer::PostExecute()
       m_depths[i] = FindMinDepth(camera, bounds);
 
       // DEBUG: render out image parts
-      // encoder.Encode(color_buffer, width, height);
-      // encoder.Save(m_renders[i].GetImageName() + std::to_string(vtkh::GetMPIRank()) + ".png");
+      if (false && i == 0)
+      {
+        PNGEncoder encoder;
+        encoder.Encode(color_buffer, width, height);
+        encoder.Save(m_renders[i].GetImageName() + std::to_string(vtkh::GetMPIRank()) + ".png");
+      }
     }
     // auto end = std::chrono::system_clock::now();
     // std::chrono::duration<double> elapsed = end - start0;

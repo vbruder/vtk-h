@@ -174,7 +174,7 @@ Scene::Render(const bool do_composite)
 
     std::vector<vtkh::Render> current_batch(begin, end);
 
-    for(auto  render : current_batch)
+    for(auto render : current_batch)
     {
       render.GetCanvas().Clear();
     }
@@ -227,17 +227,21 @@ Scene::Render(const bool do_composite)
     {
       if(synch_depths)
       {
-        SynchDepths(current_batch);
+        // TODO: adapt for hybrid in situ
+        // SynchDepths(current_batch);
       }
       (*renderer)->SetDoComposite(do_composite);
       (*renderer)->SetRenders(current_batch);
       (*renderer)->Update();
       
-      current_batch  = (*renderer)->GetRenders();
-      (*renderer)->ClearRenders();
+      if (do_composite)
+      {
+        current_batch  = (*renderer)->GetRenders();
+      }
+      // (*renderer)->ClearRenders();   // TODO: test if we need this (w/o before update)
     }
 
-    if(do_once)
+    if(do_once && do_composite)
     {
       // gather color tables and other information for
       // annotations
@@ -277,6 +281,7 @@ Scene::Render(const bool do_composite)
       {
         current_batch[i].Save(true);
       }
+      m_renders[batch_start + i].GetCanvas().Clear();
     }
 
     batch_start = batch_end;

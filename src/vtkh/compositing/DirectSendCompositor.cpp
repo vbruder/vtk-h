@@ -125,7 +125,7 @@ DirectSendCompositor::CompositeVolume(vtkhdiy::mpi::communicator &diy_comm,
 
   const int num_threads = 1;
   const int num_blocks = diy_comm.size();
-  const int magic_k = 8;
+  const int magic_k = 2;
   Image sub_image;
   //
   // DIY does not seem to like being called with different block types
