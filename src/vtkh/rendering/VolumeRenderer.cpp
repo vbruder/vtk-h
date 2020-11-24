@@ -514,7 +514,7 @@ VolumeRenderer::RenderOneDomainPerRank()
       rank = vtkh::GetMPIRank();
 #endif
       m_skipped = true;
-      std::cout << "--- Skip block on rank " << rank << std::endl;
+      std::cout << rank << " |vtk-h| Skip block" << std::endl;
       AddRenderTime(0.0);
       continue;
     }
@@ -533,17 +533,27 @@ VolumeRenderer::RenderOneDomainPerRank()
     m_depths.resize(m_renders.size(), std::numeric_limits<float>::lowest());
 
     log_global_time("begin rendering", vtkh::GetMPIRank());
+
+    const int width = 800;
+    const int height = 800;
+    const int color_stride = 4;     // RGBA
+    const int size = width * height;
+    const int color_size = size * color_stride;
+
+    const int supersampling = 2;    // This is per dimension. Set to 1 to disable supersampling.
+    const int super_width = width*supersampling;
+    const int super_height = height*supersampling;
+    const int super_color_line = super_width * color_stride;
+
     for(int i = 0; i < total_renders; ++i)
     {
+      m_renders[i].SetHeight(super_height);
+      m_renders[i].SetWidth(super_width);
+
       Render::vtkmCanvas &canvas = m_renders[i].GetCanvas();
       canvas.Clear(); // TODO: 
+
       const vtkmCamera &camera = m_renders[i].GetCamera();
-
-      const int width = canvas.GetWidth();
-      const int height = canvas.GetHeight();
-      const int size = width * height;
-      const int color_size = size * 4;
-
       m_mapper->SetActiveColorTable(m_corrected_color_table);
 
       auto t1 = std::chrono::high_resolution_clock::now();
@@ -567,8 +577,8 @@ VolumeRenderer::RenderOneDomainPerRank()
       //   encoder.Save(m_renders[i].GetImageName() + std::to_string(vtkh::GetMPIRank()) + "-DEBUG.png");
       // }
 
-      // TODO: fake higher render load
-      usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+      // fake higher render load with usleep
+      // usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
       auto t3 = std::chrono::high_resolution_clock::now();
 
       auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t1).count();
@@ -577,13 +587,32 @@ VolumeRenderer::RenderOneDomainPerRank()
       // Copy color buffer. we need to do this here because of the buffer override.
       if (!m_skipped)
       {
+        // TODO: copy depth buffer as well to not get overridden (if necessary)
+        // float* depth_buffer = GetVTKMPointer(canvas.GetDepthBuffer());
+        // m_depth_buffers[i] = std::vector<float>(depth_buffer, depth_buffer + size);
+
         float* color_buffer = &GetVTKMPointer(canvas.GetColorBuffer())[0][0];
         m_color_buffers[i] = std::vector<unsigned char>(color_size, 0u);
-      #ifdef VTKH_USE_OPENMP
-        #pragma omp parallel for
-      #endif
-        for (size_t j = 0; j < m_color_buffers[i].size(); j++)
-          m_color_buffers[i][j] = static_cast<unsigned char>(int(color_buffer[j] * 255.f));
+
+        for (size_t j = 0; j < height; ++j)
+        {
+        #ifdef VTKH_USE_OPENMP
+          #pragma omp parallel for
+        #endif
+          for (int k = 0; k < width; ++k)
+          {
+            size_t super_id = j*super_color_line*supersampling + k*supersampling*color_stride;
+            for (size_t c = 0; c < color_stride; ++c)  // RGBA
+            {
+              float col = color_buffer[super_id + c];
+              col += color_buffer[super_id + c + color_stride];        // next element in line
+              col += color_buffer[super_id + c + super_color_line];    // next line
+              col += color_buffer[super_id + c + super_color_line + color_stride];
+              unsigned char final_color = static_cast<unsigned char>(int((col/color_stride) * 255.f));
+              m_color_buffers[i][j*width*color_stride + k*color_stride + c] = final_color;
+            }
+          }
+        }
 
         vtkm::Bounds bounds = this->m_input->GetDomainBounds(0);
         m_depths[i] = FindMinDepth(camera, bounds);
