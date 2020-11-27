@@ -268,21 +268,21 @@ Scene::Render(const bool do_composite)
       }
     }
 
-#ifdef VTKH_USE_OPENMP
-    #pragma omp parallel for
-#endif
-    for(int i = 0; i < current_batch.size(); ++i)
-    {
-      // current_batch[i].RenderWorldAnnotations();
-      // current_batch[i].RenderScreenAnnotations(field_names, ranges, color_tables);
-      // current_batch[i].RenderBackground();
+// #ifdef VTKH_USE_OPENMP
+//     #pragma omp parallel for
+// #endif
+//     for(int i = 0; i < current_batch.size(); ++i)
+//     {
+//       // current_batch[i].RenderWorldAnnotations();
+//       // current_batch[i].RenderScreenAnnotations(field_names, ranges, color_tables);
+//       // current_batch[i].RenderBackground();
 
-      if (do_composite)
-      {
-        current_batch[i].Save(true);
-      }
-      m_renders[batch_start + i].GetCanvas().Clear();
-    }
+//       if (do_composite)
+//       {
+//         current_batch[i].Save(true);
+//       }
+//       m_renders[batch_start + i].GetCanvas().Clear();
+//     }
 
     batch_start = batch_end;
   } // while batches

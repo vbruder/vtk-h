@@ -540,7 +540,7 @@ VolumeRenderer::RenderOneDomainPerRank()
     const int size = width * height;
     const int color_size = size * color_stride;
 
-    const int supersampling = 3;    // This is per dimension. Set to 1 to disable supersampling.
+    const int supersampling = 1;    // This is per dimension. Set to 1 to disable supersampling.
     const int super_width = width*supersampling;
     const int super_height = height*supersampling;
     const int super_color_line = super_width * color_stride;
@@ -625,6 +625,10 @@ VolumeRenderer::RenderOneDomainPerRank()
         vtkm::Bounds bounds = this->m_input->GetDomainBounds(0);
         m_depths[i] = FindMinDepth(camera, bounds);
       }
+
+      // reset dimensions to regular resolution
+      m_renders[i].SetHeight(height);
+      m_renders[i].SetWidth(width);
     }
     log_global_time("end rendering", vtkh::GetMPIRank());
   }
@@ -916,18 +920,31 @@ VolumeRenderer::Composite(const int &num_images)
 
   for(int i = 0; i < num_images; ++i)
   {
-    float* color_buffer =
-      &GetVTKMPointer(m_renders[i].GetCanvas().GetColorBuffer())[0][0];
-    float* depth_buffer =
-      GetVTKMPointer(m_renders[i].GetCanvas().GetDepthBuffer());
     int height = m_renders[i].GetCanvas().GetHeight();
     int width = m_renders[i].GetCanvas().GetWidth();
+    float* depth_buffer =
+      GetVTKMPointer(m_renders[i].GetCanvas().GetDepthBuffer());
 
-    m_compositor->AddImage(color_buffer,
-                           depth_buffer,
-                           width,
-                           height,
-                           m_visibility_orders[i][0]);
+    if (m_skipped)
+    {
+      // float* color_buffer = 
+      //   &GetVTKMPointer(m_renders[i].GetCanvas().GetColorBuffer())[0][0];
+      std::vector<unsigned char> color_buffer(width*height*4, (unsigned char)(0));
+      m_compositor->AddImage(color_buffer.data(),
+                            depth_buffer,
+                            width,
+                            height,
+                            m_visibility_orders[i][0]);
+    }
+    else
+    {
+      unsigned char* color_buffer = m_color_buffers[i].data();
+      m_compositor->AddImage(color_buffer,
+                            depth_buffer,
+                            width,
+                            height,
+                            m_visibility_orders[i][0]);
+    }
 
     Image result = m_compositor->Composite();
     const std::string image_name = m_renders[i].GetImageName() + ".png";
@@ -936,6 +953,9 @@ VolumeRenderer::Composite(const int &num_images)
     {
 #endif
       ImageToCanvas(result, m_renders[i].GetCanvas(), true);
+      // we save here instead of in Scene now to circumvent the canvas override
+      m_renders[i].Save(true);
+      m_renders[i].GetCanvas().Clear();
 #ifdef VTKH_PARALLEL
     }
 #endif
