@@ -310,7 +310,7 @@ struct VTKH_API Image
       return ss.str();
     }
 
-    void Save(const std::string &name, bool asPNG = true);
+    void Save(const std::string &name, bool asPNG = true) const;
 };
 
 struct CompositeOrderSort

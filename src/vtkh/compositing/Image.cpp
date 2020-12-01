@@ -9,7 +9,7 @@
 namespace vtkh
 {
 
-void Image::Save(const std::string &name, bool asPNG)
+void Image::Save(const std::string &name, bool asPNG) const 
 {
     const int width = m_bounds.X.Max - m_bounds.X.Min + 1;
     const int height = m_bounds.Y.Max - m_bounds.Y.Min + 1;

@@ -22,6 +22,8 @@
 
 #include <vtkh/compositing/VolumePartial.hpp>
 
+#include <thread>
+
 #define VTKH_OPACITY_CORRECTION 10.f
 
 namespace vtkh {
@@ -509,10 +511,7 @@ VolumeRenderer::RenderOneDomainPerRank()
     // TODO: m_range ->  m_scalar_range ; threshold == 0.001 ?
     if (!HasContribution(m_range, data_set, vtkm::Float64(0.001)))
     {
-      int rank = 0;
-#ifdef VTKH_PARALLEL
-      rank = vtkh::GetMPIRank();
-#endif
+      int rank = vtkh::GetMPIRank();
       m_skipped = true;
       std::cout << rank << " |vtk-h| Skip block" << std::endl;
       AddRenderTime(0.0);
@@ -807,10 +806,7 @@ VolumeRenderer::PostExecute()
 
   if(m_do_composite)
   {
-    int rank = 0;
-#ifdef VTKH_PARALLEL
-    rank = vtkh::GetMPIRank();
-#endif
+    int rank = vtkh::GetMPIRank();
     log_global_time("begin compositing", rank);
     this->Composite(total_renders);
     log_global_time("end compositing", rank);
@@ -909,6 +905,12 @@ VolumeRenderer::FindMinDepth(const vtkm::rendering::Camera &camera,
   return dist;
 }
 
+void 
+SaveImage(const vtkh::Image &image, const std::string &name)
+{
+  image.Save(name, true);
+}
+
 void
 VolumeRenderer::Composite(const int &num_images)
 {
@@ -918,6 +920,11 @@ VolumeRenderer::Composite(const int &num_images)
 
   FindVisibilityOrdering();
 
+  // buffer composited images and names for multi-threaded save
+  std::vector<std::thread> threads;
+  std::vector<vtkh::Image> images(num_images);
+  std::vector<std::string> names(num_images);
+
   for(int i = 0; i < num_images; ++i)
   {
     int height = m_renders[i].GetCanvas().GetHeight();
@@ -925,42 +932,53 @@ VolumeRenderer::Composite(const int &num_images)
     float* depth_buffer =
       GetVTKMPointer(m_renders[i].GetCanvas().GetDepthBuffer());
 
-    if (m_skipped)
+    if (m_skipped)  // add empty buffer
     {
-      // float* color_buffer = 
-      //   &GetVTKMPointer(m_renders[i].GetCanvas().GetColorBuffer())[0][0];
       std::vector<unsigned char> color_buffer(width*height*4, (unsigned char)(0));
       m_compositor->AddImage(color_buffer.data(),
-                            depth_buffer,
-                            width,
-                            height,
-                            m_visibility_orders[i][0]);
+                             depth_buffer,
+                             width,
+                             height,
+                             m_visibility_orders[i][0]);
     }
     else
     {
       unsigned char* color_buffer = m_color_buffers[i].data();
       m_compositor->AddImage(color_buffer,
-                            depth_buffer,
-                            width,
-                            height,
-                            m_visibility_orders[i][0]);
+                             depth_buffer,
+                             width,
+                             height,
+                             m_visibility_orders[i][0]);
     }
 
-    Image result = m_compositor->Composite();
-    const std::string image_name = m_renders[i].GetImageName() + ".png";
-#ifdef VTKH_PARALLEL
+    images.at(i) = m_compositor->Composite();
+
     if(vtkh::GetMPIRank() == 0)
     {
-#endif
-      ImageToCanvas(result, m_renders[i].GetCanvas(), true);
+      names.at(i) = m_renders[i].GetImageName() + ".png";
       // we save here instead of in Scene now to circumvent the canvas override
-      m_renders[i].Save(true);
-      m_renders[i].GetCanvas().Clear();
-#ifdef VTKH_PARALLEL
+      threads.push_back(std::thread(&SaveImage, std::ref(images.at(i)), std::ref(names.at(i))));
+      // ImageToCanvas(result, m_renders[i].GetCanvas(), true);
+      // m_renders[i].Save(true);
+      // m_renders[i].GetCanvas().Clear();
     }
-#endif
+
     m_compositor->ClearImages();
   } // for image
+
+  if(vtkh::GetMPIRank() == 0)
+  {
+    log_global_time("begin save", vtkh::GetMPIRank());
+    while (threads.size() > 0)
+    {
+        if (threads.back().joinable())
+            threads.back().join();
+        else
+            std::cout << "ERROR: Thread not joinable (vtk-h VolumeRenderer::Composit)." << std::endl;
+        threads.pop_back();
+    }
+    log_global_time("end save", vtkh::GetMPIRank());
+  }
 }
 
 void
