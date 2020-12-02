@@ -23,6 +23,7 @@
 #include <vtkh/compositing/VolumePartial.hpp>
 
 #include <thread>
+#include <queue>
 
 #define VTKH_OPACITY_CORRECTION 10.f
 
@@ -801,7 +802,6 @@ void ActivePixelEncoding(const size_t size, const float* colors, const float* de
 void
 VolumeRenderer::PostExecute()
 {
-//<<<<<<< HEAD
   int total_renders = static_cast<int>(m_renders.size());
 
   if(m_do_composite)
@@ -809,7 +809,8 @@ VolumeRenderer::PostExecute()
     int rank = vtkh::GetMPIRank();
     log_global_time("begin compositing", rank);
     this->Composite(total_renders);
-    log_global_time("end compositing", rank);
+    if (vtkh::GetMPIRank() != 0)
+      log_global_time("end compositing", rank);
   }
   else if (!m_skipped && false) // we copy the color buffer in RenderOneDomainPerRank now
   {
@@ -868,10 +869,6 @@ VolumeRenderer::PostExecute()
     // std::chrono::duration<double> elapsed = end - start0;
     // std::cout << "-- copy buffers " << elapsed.count() << std::endl;
   }
-//=======
-  // do nothing and override compositing since
-  // we already did it
-//>>>>>>> upstream/develop
 }
 
 void
@@ -911,6 +908,33 @@ SaveImage(const vtkh::Image &image, const std::string &name)
   image.Save(name, true);
 }
 
+void 
+image_consumer(std::mutex &mu, std::condition_variable &cond,
+               std::deque<std::pair<vtkh::Image *, std::string> > &buffer)
+{
+    // std::cout << "Created consumer " << std::this_thread::get_id() << std::endl;
+    while (true)
+    {
+        std::unique_lock<std::mutex> mlock(mu);
+        cond.wait(mlock, [&buffer](){ return buffer.size() > 0; });
+        std::pair<vtkh::Image *, std::string> image = buffer.front();
+        // std::cout << "consumed " << image.second << std::endl;
+        buffer.pop_front();
+        mlock.unlock();
+        cond.notify_all();
+
+        if (image.first == nullptr && image.second == "KILL") // poison indicator
+        {
+            // std::cout << "Killed consumer " << std::this_thread::get_id() << std::endl;
+            return;
+        }
+        else
+        {
+            image.first->Save(image.second, true);
+        }
+    }
+}
+
 void
 VolumeRenderer::Composite(const int &num_images)
 {
@@ -921,64 +945,113 @@ VolumeRenderer::Composite(const int &num_images)
   FindVisibilityOrdering();
 
   // buffer composited images and names for multi-threaded save
-  std::vector<std::thread> threads;
-  std::vector<vtkh::Image> images(num_images);
-  std::vector<std::string> names(num_images);
+  // std::queue<std::thread> threads;
+  // std::vector<vtkh::Image> images(num_images);
+  // std::vector<std::string> names(num_images);
+
+  unsigned int thread_count = std::thread::hardware_concurrency();
+  thread_count = std::min(thread_count, 24u);     // limit to 24 consumers to avoid overhead
+  std::mutex mu;
+  const int max_buffer_size = thread_count * 4;   // buffer a max of 4 images per thread
+  std::condition_variable cond;
+  std::deque<std::pair<vtkh::Image *, std::string> > buffer;
+  std::vector<std::thread> consumers(thread_count);
+  if (vtkh::GetMPIRank() == 0)
+  {
+      for (int i = 0; i < consumers.size(); ++i)
+          consumers[i] = std::thread(&image_consumer, std::ref(mu), std::ref(cond), std::ref(buffer));
+  }
+
+  std::vector<vtkh::Compositor> compositors(num_images);
+  std::vector<vtkh::Image *> results(num_images);
 
   for(int i = 0; i < num_images; ++i)
   {
+    compositors[i].SetCompositeMode(vtkh::Compositor::VIS_ORDER_BLEND);
+
     int height = m_renders[i].GetCanvas().GetHeight();
     int width = m_renders[i].GetCanvas().GetWidth();
     float* depth_buffer =
       GetVTKMPointer(m_renders[i].GetCanvas().GetDepthBuffer());
-
     if (m_skipped)  // add empty buffer
     {
       std::vector<unsigned char> color_buffer(width*height*4, (unsigned char)(0));
-      m_compositor->AddImage(color_buffer.data(),
-                             depth_buffer,
-                             width,
-                             height,
-                             m_visibility_orders[i][0]);
+      compositors[i].AddImage(color_buffer.data(),
+                               depth_buffer,
+                               width,
+                               height,
+                               m_visibility_orders[i][0]);
     }
     else
     {
       unsigned char* color_buffer = m_color_buffers[i].data();
-      m_compositor->AddImage(color_buffer,
-                             depth_buffer,
-                             width,
-                             height,
-                             m_visibility_orders[i][0]);
+      compositors[i].AddImage(color_buffer,
+                               depth_buffer,
+                               width,
+                               height,
+                               m_visibility_orders[i][0]);
     }
 
-    images.at(i) = m_compositor->Composite();
+    // images.at(i) = m_compositor->Composite();
+    results[i] = compositors[i].CompositeNoCopy();
 
-    if(vtkh::GetMPIRank() == 0)
+    if (vtkh::GetMPIRank() == 0)
     {
-      names.at(i) = m_renders[i].GetImageName() + ".png";
-      // we save here instead of in Scene now to circumvent the canvas override
-      threads.push_back(std::thread(&SaveImage, std::ref(images.at(i)), std::ref(names.at(i))));
-      // ImageToCanvas(result, m_renders[i].GetCanvas(), true);
-      // m_renders[i].Save(true);
-      // m_renders[i].GetCanvas().Clear();
+      std::string name = m_renders[i].GetImageName() + ".png";
+
+      std::unique_lock<std::mutex> mlock(mu);
+      cond.wait(mlock, [&buffer, &max_buffer_size](){ return buffer.size() < max_buffer_size; });
+      buffer.push_back(std::make_pair(results[i], name));
+      // std::cout << "produced " << name << std::endl;
+      mlock.unlock();
+      cond.notify_all();
+
+      if (i == num_images - 1)  // last image -> kill consumers
+      {
+          log_global_time("end compositing", vtkh::GetMPIRank());
+          log_global_time("begin save", vtkh::GetMPIRank());
+          std::cout << vtkh::GetMPIRank() << " |vtk-h| Clean up consumers." << std::endl;
+          // poison consumers for cleanup
+          for (int i = 0; i < consumers.size(); ++i)
+          {
+              std::unique_lock<std::mutex> locker(mu);
+              cond.wait(locker, [&buffer, &max_buffer_size](){ return buffer.size() < max_buffer_size; });
+              buffer.push_back(std::make_pair(nullptr, std::string("KILL")));
+              locker.unlock();
+              cond.notify_all();
+          }
+          for (auto& t : consumers)
+              t.join();
+          log_global_time("end save", vtkh::GetMPIRank());
+      }
     }
 
-    m_compositor->ClearImages();
+    // if(vtkh::GetMPIRank() == 0)
+    // {
+    //   names.at(i) = m_renders[i].GetImageName() + ".png";
+    //   // we save here instead of in Scene now to circumvent the canvas override
+    //   threads.push(std::thread(&SaveImage, std::ref(images.at(i)), std::ref(names.at(i))));
+    //   // ImageToCanvas(result, m_renders[i].GetCanvas(), true);
+    //   // m_renders[i].Save(true);
+    //   // m_renders[i].GetCanvas().Clear();
+    // }
+
+    // m_compositor->ClearImages();
   } // for image
 
-  if(vtkh::GetMPIRank() == 0)
-  {
-    log_global_time("begin save", vtkh::GetMPIRank());
-    while (threads.size() > 0)
-    {
-        if (threads.back().joinable())
-            threads.back().join();
-        else
-            std::cout << "ERROR: Thread not joinable (vtk-h VolumeRenderer::Composit)." << std::endl;
-        threads.pop_back();
-    }
-    log_global_time("end save", vtkh::GetMPIRank());
-  }
+  // if(vtkh::GetMPIRank() == 0)
+  // {
+  //   log_global_time("begin save", vtkh::GetMPIRank());
+  //   while (threads.size() > 0)
+  //   {
+  //       if (threads.front().joinable())
+  //           threads.front().join();
+  //       else
+  //           std::cout << "ERROR: Thread not joinable (vtk-h VolumeRenderer::Composit)." << std::endl;
+  //       threads.pop();
+  //   }
+  //   log_global_time("end save", vtkh::GetMPIRank());
+  // }
 }
 
 void
