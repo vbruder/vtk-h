@@ -252,7 +252,8 @@ Renderer::PreExecute()
 
   // TODO: work around the global call -> validate
   m_bounds = m_input->GetBounds(); // m_input->GetGlobalBounds();
-
+  
+  // m_bounds contain only local domain bounds 
   // std::cout << "*** bounds: " << m_bounds.X.Min << "  "
   //           << m_bounds.X.Max << " / "
   //           << m_bounds.Y.Min << " "
@@ -359,8 +360,8 @@ Renderer::DoExecute()
 
       auto t2 = std::chrono::high_resolution_clock::now();
 
-      // TODO: fake higher render load
-      usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
+      // fake higher render load
+      // usleep(3 * std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count());
 
       auto t3 = std::chrono::high_resolution_clock::now();
       // std::cout << "RENDER TIMES: "

@@ -807,6 +807,7 @@ VolumeRenderer::PostExecute()
   if(m_do_composite)
   {
     int rank = vtkh::GetMPIRank();
+    vtkh::GlobalBarrier();
     log_global_time("begin compositing", rank);
     this->Composite(total_renders);
     if (vtkh::GetMPIRank() != 0)

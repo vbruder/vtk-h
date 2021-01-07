@@ -32,6 +32,7 @@ namespace vtkh
 
   VTKH_API int         GetMPIRank();
   VTKH_API int         GetMPISize();
+  VTKH_API void        GlobalBarrier();
 
   VTKH_API void        SetMPICommHandle(int mpi_comm_id);
   VTKH_API int         GetMPICommHandle();
