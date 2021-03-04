@@ -532,17 +532,22 @@ VolumeRenderer::RenderOneDomainPerRank()
     m_color_buffers.resize(total_renders);
     m_depths.resize(m_renders.size(), std::numeric_limits<float>::lowest());
 
+    if (total_renders <= 0)
+      continue;
+
     log_global_time("begin rendering", vtkh::GetMPIRank());
 
-    const int width = 800;
-    const int height = 800;
+    const int height = m_renders[0].GetHeight();
+    const int width  = m_renders[0].GetWidth();
+
     const int color_stride = 4;     // RGBA
     const int size = width * height;
     const int color_size = size * color_stride;
 
-    const int supersampling = 1;    // This is per dimension. Set to 1 to disable supersampling.
-    const int super_width = width*supersampling;
-    const int super_height = height*supersampling;
+    // Supersampling factor is per dimension. Set to 1 (default) to disable supersampling.
+    // std::cout << "SUPERSAMPLING: " << m_supersampling << std::endl; 
+    const int super_width  = width  * m_supersampling;
+    const int super_height = height * m_supersampling;
     const int super_color_line = super_width * color_stride;
 
     for(int i = 0; i < total_renders; ++i)
@@ -601,21 +606,21 @@ VolumeRenderer::RenderOneDomainPerRank()
         #endif
           for (int k = 0; k < width; ++k)
           {
-            size_t super_id = j*super_color_line*supersampling + k*supersampling*color_stride;
+            size_t super_id = j*super_color_line*m_supersampling + k*m_supersampling*color_stride;
             for (size_t c = 0; c < color_stride; ++c)  // RGBA
             {
               size_t line_id = super_id;
               float col = 0.f;
-              for (size_t kernel_j = 0; kernel_j < supersampling; ++kernel_j)
+              for (size_t kernel_j = 0; kernel_j < m_supersampling; ++kernel_j)
               {
-                for (size_t kernel_i = 0; kernel_i < supersampling; ++kernel_i)
+                for (size_t kernel_i = 0; kernel_i < m_supersampling; ++kernel_i)
                 {
                   col += color_buffer[line_id + kernel_i*color_stride + c];
                 }
                 line_id += super_color_line;
               }
 
-              col /= (supersampling*supersampling);
+              col /= (m_supersampling * m_supersampling);
               unsigned char final_color = static_cast<unsigned char>(int(col * 255.f));
               m_color_buffers[i][j*width*color_stride + k*color_stride + c] = final_color;
             }

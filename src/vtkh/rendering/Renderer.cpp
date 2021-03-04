@@ -128,6 +128,11 @@ vtkm::cont::ColorTable Renderer::GetColorTable() const
   return m_color_table;
 }
 
+void Renderer::SetSupersampling(const int supersampling)
+{
+  m_supersampling = supersampling;
+}
+
 bool Renderer::HasContribution(const vtkm::Range &plot_scalar_range,
                                const vtkm::cont::DataSet &dom,
                                const vtkm::Float64 threshold)

@@ -40,6 +40,7 @@ public:
   void SetDoComposite(bool do_composite);
   void SetRenders(const std::vector<Render> &renders);
   void SetRange(const vtkm::Range &range);
+  void SetSupersampling(const int supersampling);
 
   bool HasContribution(const vtkm::Range &plot_scalar_range,
                        const vtkm::cont::DataSet &dom,
@@ -103,6 +104,7 @@ protected:
   std::vector<std::vector<float> >         m_depth_buffers;
   std::vector<float>                       m_depths;
   bool                                     m_skipped = false;
+  int                                      m_supersampling = 1;
 
   // methods
   virtual void PreExecute() override;
